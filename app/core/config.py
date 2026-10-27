@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    GROQ_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"

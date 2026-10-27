@@ -2,6 +2,7 @@
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from app.core.config import settings
+from app.services.groq_agent import GroqAgentService
 from app.services.gemini_agent import GeminiAgentService
 from app.models.booking import ChatMessage
 
@@ -26,7 +27,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     history = chat_histories.get(chat_id, [])
-    res = await GeminiAgentService.chat(user_message=user_text, history=history, channel="telegram")
+    
+    if settings.GROQ_API_KEY:
+        res = await GroqAgentService.chat(user_message=user_text, history=history, channel="telegram")
+    else:
+        res = await GeminiAgentService.chat(user_message=user_text, history=history, channel="telegram")
     
     history.append(ChatMessage(role="user", content=user_text))
     history.append(ChatMessage(role="model", content=res.reply))
