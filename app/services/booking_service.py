@@ -1,7 +1,7 @@
-﻿from datetime import datetime, date
+from datetime import datetime, date
 from typing import Optional, Tuple
 from app.db.supabase import get_supabase_client
-from app.models.booking import BookingCreateRequest, BookingResponse, TableAllocation
+from app.models.booking import BookingCreateRequest, BookingResponse, TableAllocation, ADULT_PRICE, CHILD_PRICE
 
 # Fallback tables if database tables table is empty
 FALLBACK_TABLES = [
@@ -127,6 +127,13 @@ class AvailabilityEngine:
 
         # 2. Smart Auto Table Allocation
         allocated_table = cls.find_best_table(req.party_size, req.service_date, req.service_time)
+
+        # Determine adults/children — fallback: all adults if not provided
+        adults = req.adults if req.adults > 0 else req.party_size
+        children = req.children
+        if adults + children != req.party_size:
+            adults = req.party_size - children
+        total_price = round(adults * ADULT_PRICE + children * CHILD_PRICE, 2)
         
         supabase = get_supabase_client()
         if allocated_table:
@@ -151,6 +158,9 @@ class AvailabilityEngine:
             "guest_name": req.guest_name,
             "phone": req.phone,
             "party_size": req.party_size,
+            "adults": adults,
+            "children": children,
+            "total_price": total_price,
             "service_date": req.service_date,
             "service_time": req.service_time,
             "channel": req.channel,
@@ -170,6 +180,9 @@ class AvailabilityEngine:
             id=booking_id,
             guest_name=req.guest_name,
             party_size=req.party_size,
+            adults=adults,
+            children=children,
+            total_price=total_price,
             service_date=req.service_date,
             service_time=req.service_time,
             channel=req.channel,
