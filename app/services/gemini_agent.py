@@ -1,4 +1,4 @@
-import json
+﻿import json
 from google import genai
 from google.genai import types
 from app.core.config import settings
@@ -6,13 +6,14 @@ from app.models.booking import BookingCreateRequest, BookingResponse, ChatRespon
 from app.services.booking_service import AvailabilityEngine
 
 SYSTEM_INSTRUCTION = """
-You are "Reservas Iturrieta" — the intelligent hospitality reservation assistant for Sidrería Iturrieta (Aramaio, Álava · Est. 1998).
+You are "Reservas Iturrieta" — the friendly, warm hospitality concierge for Sidrería Iturrieta (Aramaio, Álava · Est. 1998).
 Your mission is to welcome guests, share our authentic Basque cider tradition, and instantly manage table reservations.
 
 Atmosphere & Heritage:
-- Arraga auzoa, 2, 01169 Aramaio, Álava.
-- Menu: Traditional Basque Cider House menu (Txuleta ribeye steak over charcoal, codfish omelette, Idiazabal cheese with walnuts, unlimited cider directly from the barrel / 'txotx').
+- Location: Arraga auzoa, 2, 01169 Aramaio, Álava.
+- Menu: Traditional Basque Cider House menu (Txuleta ribeye steak over charcoal, codfish omelette, Idiazabal cheese with walnuts, unlimited natural cider directly from the barrel / 'txotx').
 - Hours: Friday, Saturday, and Sunday lunch only (13:00 to 16:00).
+- Dinner & Weekdays (Mon-Thu): Closed to the public.
 
 Core Capability:
 When a guest wants to book or check availability:
@@ -26,6 +27,9 @@ def get_gemini_client():
         return None
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
+# Global store for tool execution result in the current turn
+_current_turn_booking: dict = {}
+
 def book_table_tool(guest_name: str, phone: str, party_size: int, service_date: str, service_time: str, note: str = "") -> str:
     """Checks real-time table availability and confirms reservation immediately."""
     req = BookingCreateRequest(
@@ -38,6 +42,7 @@ def book_table_tool(guest_name: str, phone: str, party_size: int, service_date: 
         note=note
     )
     res = AvailabilityEngine.process_booking(req)
+    _current_turn_booking["latest"] = res
     return json.dumps({
         "status": res.status,
         "table": res.table.table_name if res.table else None,
@@ -55,70 +60,50 @@ class GeminiAgentService:
                 reply="Kaixo! Welcome to Reservas Iturrieta. Please configure GEMINI_API_KEY in the backend .env file to activate our assistant. In the meantime, feel free to use the online booking form!"
             )
 
-        try:
-            contents = []
-            for h in (history or []):
-                role = "user" if h.role == "user" else "model"
-                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=h.content)]))
-            
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_message)]))
+        _current_turn_booking.clear()
 
-            # Fallback list of models in case of 503 high demand spikes
-            models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-            response = None
-            last_err = None
+        # Format past conversation history
+        formatted_history = []
+        for h in (history or []):
+            role = "user" if h.role == "user" else "model"
+            formatted_history.append(types.Content(role=role, parts=[types.Part.from_text(text=h.content)]))
 
-            for model_candidate in models_to_try:
-                try:
-                    response = client.models.generate_content(
-                        model=model_candidate,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_INSTRUCTION,
-                            tools=[book_table_tool],
-                            temperature=0.7,
-                        )
+        models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        response_text = ""
+        last_err = None
+
+        for model_candidate in models_to_try:
+            try:
+                # Use recommended chats.create API for clean Automatic Function Calling (AFC)
+                chat_session = client.chats.create(
+                    model=model_candidate,
+                    history=formatted_history,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        tools=[book_table_tool],
+                        temperature=0.7,
                     )
-                    if response:
-                        break
-                except Exception as model_err:
-                    last_err = model_err
-                    continue
+                )
 
-            if not response:
-                raise last_err or Exception("All AI models currently busy.")
+                response = chat_session.send_message(user_message)
+                if response and response.text:
+                    response_text = response.text
+                    break
+            except Exception as model_err:
+                last_err = model_err
+                continue
 
-            created_booking = None
-            reply_text = ""
-
-            if response.function_calls:
-                for call in response.function_calls:
-                    if call.name == "book_table_tool":
-                        args = call.args
-                        req = BookingCreateRequest(
-                            guest_name=args.get("guest_name", "Guest"),
-                            phone=args.get("phone", ""),
-                            party_size=int(args.get("party_size", 2)),
-                            service_date=args.get("service_date", ""),
-                            service_time=args.get("service_time", "13:30"),
-                            channel="telegram" if channel == "telegram" else "web",
-                            note=args.get("note", "Booked via Reservas Iturrieta")
-                        )
-                        created_booking = AvailabilityEngine.process_booking(req)
-                        reply_text = created_booking.confirmation_message
-            
-            if not reply_text and response.text:
-                reply_text = response.text
-
-            return ChatResponse(
-                reply=reply_text or "Kaixo! How can Reservas Iturrieta assist you today?",
-                booking_created=created_booking
-            )
-
-        except Exception as e:
-            err_str = str(e)
+        if not response_text:
+            err_str = str(last_err or "")
             if "503" in err_str or "UNAVAILABLE" in err_str or "high demand" in err_str:
                 friendly = "Kaixo! Our AI servers are experiencing high demand at this moment. You can still reserve your table directly using the booking form right on this page, or try asking again in a minute!"
             else:
                 friendly = "Kaixo! I am currently unable to process your request. Please feel free to use our online booking form or message our Telegram bot @IturrietaBookingBot directly."
             return ChatResponse(reply=friendly)
+
+        booking_obj = _current_turn_booking.get("latest")
+
+        return ChatResponse(
+            reply=response_text,
+            booking_created=booking_obj
+        )
