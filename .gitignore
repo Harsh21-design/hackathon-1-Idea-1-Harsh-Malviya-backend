@@ -1,0 +1,23 @@
+﻿# Environments & Secrets (DO NOT COMMIT SECRETS)
+.env
+.env.*
+!.env.example
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+*.log
+
+# Virtual environments (uv / venv)
+.venv/
+venv/
+ENV/
+
+# IDE / Editor configs
+.vscode/
+.idea/
+.DS_Store
